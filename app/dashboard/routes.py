@@ -11,8 +11,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from app.quota.tracker import WindowSimulator
+from app.store import next_check_time
 
 router = APIRouter()
 
@@ -87,10 +89,16 @@ def _history(request: Request, limit: int = 20) -> list[dict]:
 def index(request: Request) -> HTMLResponse:
     cards = [_card(request, p) for p in PROVIDERS]
     history = _history(request, limit=20)
+    checkpoints = _checkpoints_view(request)
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"cards": cards, "history": history, "now": _fmt(datetime.now(timezone.utc))},
+        {
+            "cards": cards,
+            "history": history,
+            "checkpoints": checkpoints,
+            "now": _fmt(datetime.now(timezone.utc)),
+        },
     )
 
 
@@ -116,3 +124,62 @@ def api_probe(provider: str, request: Request) -> JSONResponse:
     # result.reset_time 是 datetime，需转字符串才能 JSON 序列化
     result["reset_time"] = _fmt(result.get("reset_time"))
     return JSONResponse(result)
+
+
+# ---- 自定义监控时间点 ----
+class CheckPointIn(BaseModel):
+    label: str = "自定义点"
+    time_hhmm: str  # "HH:MM" UTC
+    probe_on_trigger: bool = True
+
+
+def _checkpoints_view(request: Request) -> list[dict]:
+    """组装自定义点列表（含下次触发时刻与倒计时）。"""
+    store = request.app.state.store
+    now = datetime.now(timezone.utc)
+    rows: list[dict] = []
+    for cp, nxt in store.upcoming_checkpoints(limit=50):
+        rows.append(
+            {
+                "id": cp.id,
+                "label": cp.label,
+                "time_hhmm": cp.time_hhmm,
+                "probe_on_trigger": cp.probe_on_trigger,
+                "next_at": _fmt(nxt),
+                "seconds_until": (nxt - now).total_seconds(),
+            }
+        )
+    return rows
+
+
+@router.get("/api/checkpoints")
+def api_list_checkpoints(request: Request) -> JSONResponse:
+    return JSONResponse({"checkpoints": _checkpoints_view(request)})
+
+
+@router.post("/api/checkpoints")
+def api_add_checkpoint(body: CheckPointIn, request: Request) -> JSONResponse:
+    """新增自定义点，成功后即时重排调度。"""
+    store = request.app.state.store
+    cp = store.add_checkpoint(
+        body.label, body.time_hhmm, probe_on_trigger=body.probe_on_trigger
+    )
+    if cp is None:
+        return JSONResponse(
+            {"error": "时间格式非法（需 HH:MM）或该时间点已存在"}, status_code=400
+        )
+    # 即时重排调度任务
+    request.app.state.scheduler.reschedule_checkpoints()
+    return JSONResponse(
+        {"ok": True, "id": cp.id, "checkpoints": _checkpoints_view(request)}
+    )
+
+
+@router.delete("/api/checkpoints/{cp_id}")
+def api_delete_checkpoint(cp_id: int, request: Request) -> JSONResponse:
+    store = request.app.state.store
+    ok = store.delete_checkpoint(cp_id)
+    if not ok:
+        return JSONResponse({"error": "未找到该时间点"}, status_code=404)
+    request.app.state.scheduler.reschedule_checkpoints()
+    return JSONResponse({"ok": True, "checkpoints": _checkpoints_view(request)})

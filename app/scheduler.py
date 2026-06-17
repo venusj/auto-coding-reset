@@ -119,6 +119,44 @@ class Scheduler:
     def _initial_probe(self, provider: str) -> None:
         self.probe_and_record(provider)
         self.schedule_reset_job(provider)
+        # 初始探测后也安排一次自定义点任务
+        self.reschedule_checkpoints()
+
+    # ---- 自定义监控时间点 ----
+    def reschedule_checkpoints(self) -> None:
+        """根据库内启用的自定义点，重排所有 checkpoint 任务（增删点后调用）。
+
+        到点触发：对全家做查询+探测（probe_on_trigger 决定是否发请求），
+        随后安排下一个 24h 后的同名任务。
+        """
+        # 移除旧的所有 checkpoint_* 任务
+        if self._sched.running:
+            for job in list(self._sched.get_jobs()):
+                if job.id.startswith("checkpoint_"):
+                    self._sched.remove_job(job.id)
+        # 重新安排
+        for cp, nxt in self.store.upcoming_checkpoints(limit=50):
+            job_id = f"checkpoint_{cp.id}"
+            if self._sched.get_job(job_id):
+                continue
+            try:
+                self._sched.add_job(
+                    self._checkpoint_routine,
+                    DateTrigger(run_date=nxt, timezone=UTC),
+                    args=[cp.id, cp.probe_on_trigger],
+                    id=job_id,
+                    replace_existing=True,
+                )
+            except Exception:
+                # 调度器未启动等情况静默跳过，待下次 reschedule
+                pass
+
+    def _checkpoint_routine(self, cp_id: int, probe_on_trigger: bool) -> None:
+        """自定义点到点执行：全家查询+探测，然后安排下一个 24h 周期。"""
+        for name in self._providers:
+            self.probe_and_record(name, reset=probe_on_trigger and self.settings.trigger.reset_send_request)
+        # 安排该点下一次（明天同一时刻）
+        self.reschedule_checkpoints()
 
     def shutdown(self) -> None:
         for p in self._providers.values():

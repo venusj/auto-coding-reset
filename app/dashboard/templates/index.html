@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>auto-coding-reset · 套餐额度监控</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card: #1a1d27;
+      --border: #2a2e3a;
+      --text: #e4e6eb;
+      --muted: #8b8f9a;
+      --accent: #4f8cff;
+      --green: #2ecc71;
+      --orange: #f39c12;
+      --red: #e74c3c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                   "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; padding: 24px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    header h1 { font-size: 22px; font-weight: 600; }
+    header h1 .tag { font-size: 12px; color: var(--muted); margin-left: 8px; font-weight: 400; }
+    .clock { font-size: 13px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 28px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 22px;
+    }
+    .card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 18px; }
+    .card-head .label { font-size: 16px; font-weight: 600; }
+    .card-head .badge { font-size: 11px; padding: 3px 8px; border-radius: 10px; background: var(--border); color: var(--muted); }
+    .card-head .badge.real { background: rgba(46,204,113,.15); color: var(--green); }
+    .card-head .badge.estimate { background: rgba(243,156,18,.15); color: var(--orange); }
+    .pct { font-size: 40px; font-weight: 700; line-height: 1; }
+    .pct .small { font-size: 18px; color: var(--muted); font-weight: 400; }
+    .pct.estimate { color: var(--orange); }
+    .bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 14px 0 6px; }
+    .bar > i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+    .bar.warn > i { background: var(--orange); }
+    .row { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .row b { color: var(--text); font-weight: 500; }
+    .countdown { font-size: 15px; font-weight: 600; margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border); }
+    .countdown.expired { color: var(--red); }
+    .probe-btn {
+      margin-top: 16px; padding: 8px 16px; font-size: 13px;
+      background: var(--accent); color: #fff; border: none; border-radius: 8px; cursor: pointer;
+    }
+    .probe-btn:hover { opacity: .9; }
+    .probe-btn:disabled { opacity: .5; cursor: wait; }
+    section { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+    section h2 { font-size: 15px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    td.tag { font-size: 11px; padding: 2px 7px; border-radius: 8px; background: var(--border); display: inline-block; }
+    td .ok { color: var(--green); }
+    td .fail { color: var(--red); }
+    .pill-reset { background: rgba(79,140,255,.15); color: var(--accent); }
+    .note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .alert { background: rgba(243,156,18,.1); border: 1px solid rgba(243,156,18,.3); color: var(--orange); padding: 10px 14px; border-radius: 8px; font-size: 12px; margin-bottom: 20px; }
+    footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
+    footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>套餐额度监控 <span class="tag">auto-coding-reset</span></h1>
+      <div class="clock" id="clock">--</div>
+    </header>
+
+    <div class="alert">
+      ⚠️ 智谱无公开额度查询接口，其数字为<b>估算值</b>。MiniMax 来自实测接口。两家数据均建议用官方渠道核对。
+    </div>
+
+    <div class="grid" id="cards">
+      {% for c in cards %}
+      <div class="card" data-provider="{{ c.name }}">
+        <div class="card-head">
+          <span class="label">{{ c.label }}</span>
+          <span class="badge {{ 'real' if c.has_real_data else 'estimate' }}">
+            {{ '实测数据' if c.has_real_data else '估算' }}
+          </span>
+        </div>
+        {% if c.remaining_pct is not none %}
+          <div class="pct" data-pct="{{ c.remaining_pct }}">{{ c.remaining_pct }}<span class="small">%</span></div>
+        {% else %}
+          <div class="pct estimate">—<span class="small"> 未知</span></div>
+        {% endif %}
+        <div class="bar {{ 'warn' if c.remaining_pct and c.remaining_pct < 20 }}">
+          <i style="width: {{ c.remaining_pct if c.remaining_pct is not none else 0 }}%"></i>
+        </div>
+        <div class="row"><span>5h 窗口剩余</span><b>{{ c.remaining_pct if c.remaining_pct is not none else '（估算无法获取）' }}</b></div>
+        <div class="row"><span>周限额剩余</span><b>{{ c.weekly_remaining_pct if c.weekly_remaining_pct is not none else '—' }}{{ '%' if c.weekly_remaining_pct is not none else '' }}</b></div>
+        <div class="row"><span>窗口重置时间</span><b>{{ c.interval_end or '—' }}</b></div>
+        <div class="row"><span>最近探测</span>
+          <b>
+            {% if c.last_probe_ok is none %}—
+            {% elif c.last_probe_ok %}<span class="ok">✓ 正常</span>
+            {% else %}<span class="fail">✗ 失败</span>{% endif %}
+          </b>
+        </div>
+        <div class="countdown {{ 'expired' if c.is_expired }}"
+             data-end="{{ c.interval_end }}"
+             data-expired="{{ c.is_expired }}"
+             data-seconds="{{ c.seconds_until_reset or 0 }}">
+          {% if c.is_expired %}⏰ 窗口已到期，待重新探测{% else %}⏳ 距重置：<span class="cd">--</span>{% endif %}
+        </div>
+        <button class="probe-btn" onclick="probe('{{ c.name }}', this)">立即探测</button>
+        <div class="note">{{ c.note }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <section>
+      <h2>历史记录（最近 20 条）</h2>
+      <table>
+        <thead>
+          <tr><th>厂商</th><th>时间</th><th>5h剩余</th><th>周剩余</th><th>探测</th><th>类型</th><th>重置时间</th></tr>
+        </thead>
+        <tbody id="history">
+          {% for h in history %}
+          <tr>
+            <td><span class="tag">{{ h.label }}</span></td>
+            <td>{{ h.recorded_at }}</td>
+            <td>{{ h.remaining_pct if h.remaining_pct is not none else '—' }}{{ '%' if h.remaining_pct is not none else '' }}</td>
+            <td>{{ h.weekly_remaining_pct if h.weekly_remaining_pct is not none else '—' }}{{ '%' if h.weekly_remaining_pct is not none else '' }}</td>
+            <td>{% if h.probe_ok %}<span class="ok">✓</span>{% elif h.probe_ok is none %}—{% else %}<span class="fail">✗</span>{% endif %}</td>
+            <td>{% if h.was_reset %}<span class="pill-reset">卡点重置</span>{% endif %}</td>
+            <td>{{ h.interval_end or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <a href="https://github.com/venusj/auto-coding-reset" target="_blank">auto-coding-reset</a> · MIT · 页面每 30s 自动刷新
+    </footer>
+  </div>
+
+  <script>
+    // 倒计时
+    function tick() {
+      document.querySelectorAll('.countdown').forEach(el => {
+        if (el.dataset.expired === 'True') return;
+        let secs = parseFloat(el.dataset.seconds);
+        // 本地每秒递减（不依赖网络）
+        const cd = el.querySelector('.cd');
+        if (!cd) return;
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = Math.floor(secs % 60);
+        cd.textContent = `${h}时${m}分${s}秒`;
+        el.dataset.seconds = secs - 1;
+        if (secs <= 0) el.classList.add('expired');
+      });
+      const now = new Date();
+      document.getElementById('clock').textContent =
+        now.toLocaleString('zh-CN', { hour12: false });
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // 每 30s 拉取最新数据刷新
+    async function refresh() {
+      try {
+        const r = await fetch('/api/status');
+        const j = await r.json();
+        render(j);
+      } catch (e) { /* 静默失败，保留下次重试 */ }
+    }
+
+    function render(j) {
+      // 简化：仅刷新倒计时数字与历史表，避免重渲染整页闪烁
+      // （卡片整体刷新可作为后续增强）
+      const tbody = document.getElementById('history');
+      tbody.innerHTML = (j.history || []).map(h => `
+        <tr>
+          <td><span class="tag">${h.label}</span></td>
+          <td>${h.recorded_at}</td>
+          <td>${h.remaining_pct ?? '—'}${h.remaining_pct==null?'':'%'}</td>
+          <td>${h.weekly_remaining_pct ?? '—'}${h.weekly_remaining_pct==null?'':'%'}</td>
+          <td>${h.probe_ok===true?'<span class="ok">✓</span>':h.probe_ok===null?'—':'<span class="fail">✗</span>'}</td>
+          <td>${h.was_reset?'<span class="pill-reset">卡点重置</span>':''}</td>
+          <td>${h.interval_end || '—'}</td>
+        </tr>`).join('');
+    }
+    setInterval(refresh, 30000);
+
+    // 手动探测
+    async function probe(name, btn) {
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = '探测中…';
+      try {
+        await fetch(`/api/probe/${name}`, { method: 'POST' });
+        await refresh();
+      } finally {
+        btn.disabled = false;
+        btn.textContent = old;
+      }
+    }
+  </script>
+</body>
+</html>

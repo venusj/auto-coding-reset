@@ -1,0 +1,63 @@
+# ==========================================================
+# auto-coding-reset 配置示例
+# 复制为 config.yaml 并按你的套餐档位修改。config.yaml 已被 .gitignore 忽略。
+# ==========================================================
+
+app:
+  # Web Dashboard 监听地址，容器内用 0.0.0.0
+  host: "0.0.0.0"
+  port: 8000
+  # 是否开启调试日志
+  debug: false
+
+# ---- 厂商接入 ----
+# 滚动恢复模型下，额度无法通过公开 API 精确查询，以下 quota_5h / quota_weekly
+# 仅供本地滚动估算用，请按你购买的套餐档位填写（单位：次数）。
+providers:
+  zhipu:
+    enabled: true
+    # Coding Plan 专属 base_url，必须带 /coding/，否则会按量计费扣余额
+    base_url: "https://open.bigmodel.cn/api/coding/paas/v4"
+    # API Key 从环境变量读取，不要写进此文件
+    api_key_env: "ZHIPU_API_KEY"
+    # 探测用的最低成本模型
+    probe_model: "glm-4.5-air"
+    # 套餐档位：5 小时滚动窗口总额度与周限额（次数），按你购买的套餐填写
+    quota_5h: 80
+    quota_weekly: 320
+    # 智谱高峰时段（约 14:00-18:00 UTC+8）消耗按 3 倍计，用于预测
+    peak_hours: [14, 18]
+
+  minimax:
+    enabled: true
+    base_url: "https://api.minimaxi.com/v1"
+    api_key_env: "MINIMAX_API_KEY"
+    # 最便宜的探测模型
+    probe_model: "MiniMax-M2.5"
+    quota_5h: 0            # 按你购买的 Token Plan 档位填写
+    quota_weekly: 0
+
+# ---- 定时触发 ----
+# 注意：滚动恢复模型下，发请求只会消耗一笔额度（5h 后回滚），
+# 触发的用途是：健康探测 + 滚动行为实测 + 校准，而不是「重置窗口起点」。
+trigger:
+  # 常规探测频率（cron 表达式，6 段：秒 分 时 日 月 周）。每 3 小时探测一次。
+  probe_cron: "0 0 */3 * * *"
+  # 高峰前额外探测，如每天 13:00 做一次高峰前校准
+  peak_warmup_cron: "0 0 13 * * *"
+  # 探测请求最大输出 token，越小越省额度
+  max_tokens: 1
+
+# ---- 告警 ----
+notify:
+  enabled: false
+  # webhook URL 从环境变量 NOTIFY_WEBHOOK_URL 读取
+  # 5 小时可用额度低于该百分比时告警
+  threshold_5h_pct: 20
+  # 周限额累计消耗超过该百分比时告警
+  threshold_weekly_pct: 80
+
+# ---- 存储 ----
+storage:
+  # SQLite 文件路径，容器内建议挂载到 data/ volume
+  db_path: "data/auto_coding.db"
